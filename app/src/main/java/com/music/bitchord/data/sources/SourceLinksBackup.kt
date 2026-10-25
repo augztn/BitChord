@@ -1,5 +1,6 @@
 package com.music.bitchord.data.sources
 
+import android.net.Uri
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
@@ -42,7 +43,11 @@ object SourceLinksBackup {
         require(backup.sources.all { it.kind.isUserAdded }) {
             "Backup contains a built-in or unsupported source type"
         }
-        require(backup.sources.all { it.baseUrl.isNotBlank() && it.baseUrl.length <= MAX_URL_LENGTH }) {
+        require(backup.sources.all { config ->
+            val url = config.baseUrl
+            url.isNotBlank() && url.length <= MAX_URL_LENGTH &&
+                Uri.parse(url).let { it.scheme in setOf("http", "https") && !it.host.isNullOrBlank() }
+        }) {
             "Backup contains an empty or invalid source URL"
         }
         require(backup.sources.map { it.id }.distinct().size == backup.sources.size) {
