@@ -92,14 +92,9 @@ jobs:
             exit 1
           fi
           relative_target="${target#AppDir/}"
-          export RELATIVE_TARGET="$relative_target"
-          cat > AppDir/AppRun <<'APPRUN'
-          #!/usr/bin/env bash
-          set -euo pipefail
-          HERE="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
-          exec "$HERE/$RELATIVE_TARGET" "$@"
-          APPRUN
+          printf '#!/usr/bin/env bash\\nset -euo pipefail\\nHERE="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"\\nexec "$HERE/%s" "$@"\\n' "$relative_target" > AppDir/AppRun
           chmod 0755 AppDir/AppRun
+          install -m 0644 Logo.png AppDir/BitChord.png
 
       - name: Download appimagetool
         run: |
