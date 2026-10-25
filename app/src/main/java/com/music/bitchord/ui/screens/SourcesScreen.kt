@@ -5,6 +5,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.provider.Settings
+import android.widget.Toast
 import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -77,6 +78,7 @@ import com.music.bitchord.data.sources.SourceConfig
 import com.music.bitchord.data.sources.SourceHealth
 import com.music.bitchord.data.sources.SourceKind
 import com.music.bitchord.data.sources.SourceRegistry
+import com.music.bitchord.data.sources.SourceLinksBackup
 import com.music.bitchord.ui.components.AddonEditorAlert
 import dev.chrisbanes.haze.HazeState
 import kotlinx.coroutines.Dispatchers
@@ -123,6 +125,39 @@ fun SourcesScreen(
     modifier: Modifier = Modifier,
 ) {
     val context = LocalContext.current
+    val exportSourceLinks = rememberLauncherForActivityResult(
+        ActivityResultContracts.CreateDocument("application/json"),
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                context.contentResolver.openOutputStream(uri, "wt")
+                    ?.bufferedWriter(Charsets.UTF_8)
+                    ?.use { it.write(SourceLinksBackup.exportJson()) }
+                    ?: error("Could not open the selected file")
+            }.onSuccess {
+                Toast.makeText(context, "Source links backed up", Toast.LENGTH_LONG).show()
+            }.onFailure {
+                Toast.makeText(context, "Backup failed: ${it.message ?: "unknown error"}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
+    val importSourceLinks = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri ->
+        if (uri != null) {
+            runCatching {
+                val text = context.contentResolver.openInputStream(uri)
+                    ?.bufferedReader(Charsets.UTF_8)
+                    ?.use { it.readText() }
+                    ?: error("Could not open the selected file")
+                SourceLinksBackup.importJson(text)
+            }.onSuccess { count ->
+                Toast.makeText(context, "Restored $count source links", Toast.LENGTH_LONG).show()
+            }.onFailure {
+                Toast.makeText(context, "Restore failed: ${it.message ?: "invalid backup"}", Toast.LENGTH_LONG).show()
+            }
+        }
+    }
     val configs by SourceRegistry.configs.collectAsStateWithLifecycle()
     val wifiQuality by AppSettings.audioQualityWifi.collectAsStateWithLifecycle()
     val cellularQuality by AppSettings.audioQualityCellular.collectAsStateWithLifecycle()
@@ -292,6 +327,25 @@ fun SourcesScreen(
             RowDivider()
             AddSourceRow(
                 onClick = { onEditSource(SourceConfig(kind = SourceKind.ADDON)) },
+            )
+        }
+
+        SettingsGroup(
+            header = "Backup source links",
+            footer = "Export your user-added source links to a JSON file, or restore them from a backup. Restoring replaces existing user-added links; built-in sources stay unchanged. Review backup files before sharing them because URLs may contain tokens.",
+        ) {
+            SettingsRow(
+                icon = Icons.Rounded.Storage,
+                title = "Export source links",
+                subtitle = "Save source URLs, names, enabled states and order",
+                onClick = { exportSourceLinks.launch("bitchord-source-links.json") },
+            )
+            RowDivider()
+            SettingsRow(
+                icon = Icons.Rounded.Add,
+                title = "Restore source links",
+                subtitle = "Replace configured links from a JSON backup",
+                onClick = { importSourceLinks.launch(arrayOf("application/json", "text/*")) },
             )
         }
 

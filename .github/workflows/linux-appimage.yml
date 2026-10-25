@@ -30,12 +30,6 @@ jobs:
       - name: Check out source
         uses: actions/checkout@v4
 
-      - name: Set up JDK 17
-        uses: actions/setup-java@v4
-        with:
-          distribution: temurin
-          java-version: '17'
-
       - name: Verify Linux desktop application module exists
         shell: bash
         run: |
@@ -110,12 +104,13 @@ jobs:
           # AppRun must be a script instead of a symlink to a path which may
           # not exist on the host. Resolve the executable inside AppDir.
           relative_target="${target#AppDir/}"
-          cat > AppDir/AppRun <<EOF
+          cat > AppDir/AppRun <<'APPRUN'
           #!/usr/bin/env bash
           set -euo pipefail
           HERE="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
-          exec "$HERE/$relative_target" "$@"
-          EOF
+          exec "$HERE/__BITCHORD_EXECUTABLE__" "$@"
+          APPRUN
+          sed -i "s|__BITCHORD_EXECUTABLE__|$relative_target|" AppDir/AppRun
           chmod 0755 AppDir/AppRun
 
       - name: Download appimagetool

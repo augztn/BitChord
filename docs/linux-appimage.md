@@ -15,4 +15,9 @@ chmod +x BitChord-x86_64.AppImage
 ./BitChord-x86_64.AppImage
 ```
 
-The AppImage target is x86_64 Linux. The packaging workflow uses GitHub Actions and does not change the Android APK release workflow.
+The AppImage target is x86_64 Linux. The workflow packages only the Linux desktop target. Android-specific workflows were removed from this branch as requested; the main branch remains unchanged.
+
+
+## Source links backup
+
+The Sources screen includes **Export source links** and **Restore source links**. Export creates a JSON file containing user-added source configurations; restore validates the complete file before replacing user-added configurations. Built-in sources are left alone. Source URLs are included as configured, so review the file before sharing it if a URL may contain a token or credential.
