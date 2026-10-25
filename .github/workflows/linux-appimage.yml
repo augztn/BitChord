@@ -36,24 +36,32 @@ jobs:
           distribution: temurin
           java-version: '17'
 
-      - name: Set up Gradle
-        uses: gradle/actions/setup-gradle@v4
-
-      - name: Install AppImage tools
+      - name: Verify Linux desktop application module exists
+        shell: bash
         run: |
-          sudo apt-get update
-          sudo apt-get install --yes file desktop-file-utils libfuse2t64
-
-      - name: Verify Linux desktop entry point exists
-        run: |
+          set -euo pipefail
           if [ ! -f desktop/build.gradle.kts ]; then
-            echo "::error::The repository does not yet contain desktop/build.gradle.kts. Add a Compose Desktop application module before packaging an AppImage."
+            echo "::error::BitChord currently has no desktop/build.gradle.kts. An Android APK and shared UI library cannot be packaged as a Linux AppImage. Add the Linux desktop application host first."
             exit 1
           fi
-          if ! grep -R --include='*.kt' -E 'fun main[[:space:]]*\(' desktop/src; then
+          if ! grep -R --include='*.kt' -E 'fun main[[:space:]]*\(' desktop/src >/dev/null; then
             echo "::error::No Kotlin main() entry point found under desktop/src."
             exit 1
           fi
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install packaging dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes file desktop-file-utils libfuse2t64
 
       - name: Build distributable Linux application
         run: ./gradlew --no-daemon :desktop:packageReleaseDeb
@@ -71,30 +79,24 @@ jobs:
           fi
           echo "deb=$deb" >> "$GITHUB_OUTPUT"
 
-      - name: Convert native package to AppDir
+      - name: Create AppDir from package
         env:
           DEB_PATH: ${{ steps.package.outputs.deb }}
         run: |
           set -euo pipefail
           mkdir -p AppDir
           dpkg-deb -x "$DEB_PATH" AppDir
-          desktop_file="$(find AppDir -type f -name '*.desktop' -print -quit)"
+          desktop_file="$(find AppDir -type f -path '*/usr/share/applications/*.desktop' -print -quit)"
           if [ -z "$desktop_file" ]; then
-            echo "::error::The Debian package did not include a .desktop launcher."
+            echo "::error::The Debian package did not include a desktop launcher."
             exit 1
           fi
-          desktop_name="$(basename "$desktop_file")"
-          desktop_dir="$(dirname "$desktop_file")"
-          mkdir -p AppDir/usr/share/applications
-          cp "$desktop_file" "AppDir/usr/share/applications/$desktop_name"
-          if [ -d AppDir/usr/share/icons ]; then
-            :
-          fi
-          # AppImage expects a top-level launcher. Keep the desktop file's Exec
-          # entry as packaged by Compose Desktop and invoke its installed binary.
+
+          # AppImage uses a top-level desktop file and AppRun launcher.
+          install -m 0644 "$desktop_file" AppDir/BitChord.desktop
           exec_name="$(sed -n 's/^Exec=\([^ ]*\).*/\1/p' "$desktop_file" | head -n1)"
           if [ -z "$exec_name" ]; then
-            echo "::error::No Exec entry found in desktop launcher: $desktop_file"
+            echo "::error::No Exec entry found in $desktop_file"
             exit 1
           fi
           case "$exec_name" in
@@ -102,17 +104,26 @@ jobs:
             *) target="$(find AppDir -type f -path "*/$exec_name" -print -quit)" ;;
           esac
           if [ -z "$target" ] || [ ! -f "$target" ]; then
-            echo "::error::Could not locate launcher executable '$exec_name' inside package."
-            find AppDir -maxdepth 6 -type f -print | head -100
+            echo "::error::Could not resolve packaged executable '$exec_name'."
             exit 1
           fi
-          ln -sf "$target" AppDir/AppRun
-          cp "$desktop_file" AppDir/BitChord.desktop
-          chmod +x AppDir/AppRun
+          # AppRun must be a script instead of a symlink to a path which may
+          # not exist on the host. Resolve the executable inside AppDir.
+          relative_target="${target#AppDir/}"
+          cat > AppDir/AppRun <<EOF
+          #!/usr/bin/env bash
+          set -euo pipefail
+          HERE="$(dirname "$(readlink -f "${BASH_SOURCE[0]}")")"
+          exec "$HERE/$relative_target" "$@"
+          EOF
+          chmod 0755 AppDir/AppRun
 
       - name: Download appimagetool
         run: |
-          curl --fail --location --retry 3 --retry-all-errors             https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage             --output appimagetool
+          set -euo pipefail
+          curl --fail --location --retry 3 --retry-all-errors \
+            https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage \
+            --output appimagetool
           chmod +x appimagetool
           file appimagetool
 
@@ -120,6 +131,7 @@ jobs:
         env:
           ARCH: x86_64
         run: |
+          set -euo pipefail
           ./appimagetool --appimage-extract
           ./squashfs-root/AppRun AppDir BitChord-x86_64.AppImage
           chmod +x BitChord-x86_64.AppImage
