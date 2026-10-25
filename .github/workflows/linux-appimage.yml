@@ -1,0 +1,136 @@
+name: Linux AppImage
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - build/linux-appimage
+    paths:
+      - '.github/workflows/linux-appimage.yml'
+      - 'desktop/**'
+      - 'shared/**'
+      - 'sharedUi/**'
+      - 'settings.gradle.kts'
+      - 'build.gradle.kts'
+      - 'gradle/**'
+
+permissions:
+  contents: read
+
+concurrency:
+  group: linux-appimage-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  appimage:
+    name: Build Linux AppImage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+
+      - name: Install AppImage tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install --yes file desktop-file-utils libfuse2t64
+
+      - name: Verify Linux desktop entry point exists
+        run: |
+          if [ ! -f desktop/build.gradle.kts ]; then
+            echo "::error::The repository does not yet contain desktop/build.gradle.kts. Add a Compose Desktop application module before packaging an AppImage."
+            exit 1
+          fi
+          if ! grep -R --include='*.kt' -E 'fun main[[:space:]]*\(' desktop/src; then
+            echo "::error::No Kotlin main() entry point found under desktop/src."
+            exit 1
+          fi
+
+      - name: Build distributable Linux application
+        run: ./gradlew --no-daemon :desktop:packageReleaseDeb
+
+      - name: Locate Debian package
+        id: package
+        shell: bash
+        run: |
+          set -euo pipefail
+          deb="$(find desktop/build/compose/binaries/main/deb -maxdepth 1 -type f -name '*.deb' -print -quit)"
+          if [ -z "$deb" ]; then
+            echo "::error::Gradle finished but no .deb was produced."
+            find desktop/build/compose -maxdepth 5 -type f -print || true
+            exit 1
+          fi
+          echo "deb=$deb" >> "$GITHUB_OUTPUT"
+
+      - name: Convert native package to AppDir
+        env:
+          DEB_PATH: ${{ steps.package.outputs.deb }}
+        run: |
+          set -euo pipefail
+          mkdir -p AppDir
+          dpkg-deb -x "$DEB_PATH" AppDir
+          desktop_file="$(find AppDir -type f -name '*.desktop' -print -quit)"
+          if [ -z "$desktop_file" ]; then
+            echo "::error::The Debian package did not include a .desktop launcher."
+            exit 1
+          fi
+          desktop_name="$(basename "$desktop_file")"
+          desktop_dir="$(dirname "$desktop_file")"
+          mkdir -p AppDir/usr/share/applications
+          cp "$desktop_file" "AppDir/usr/share/applications/$desktop_name"
+          if [ -d AppDir/usr/share/icons ]; then
+            :
+          fi
+          # AppImage expects a top-level launcher. Keep the desktop file's Exec
+          # entry as packaged by Compose Desktop and invoke its installed binary.
+          exec_name="$(sed -n 's/^Exec=\([^ ]*\).*/\1/p' "$desktop_file" | head -n1)"
+          if [ -z "$exec_name" ]; then
+            echo "::error::No Exec entry found in desktop launcher: $desktop_file"
+            exit 1
+          fi
+          case "$exec_name" in
+            /*) target="AppDir$exec_name" ;;
+            *) target="$(find AppDir -type f -path "*/$exec_name" -print -quit)" ;;
+          esac
+          if [ -z "$target" ] || [ ! -f "$target" ]; then
+            echo "::error::Could not locate launcher executable '$exec_name' inside package."
+            find AppDir -maxdepth 6 -type f -print | head -100
+            exit 1
+          fi
+          ln -sf "$target" AppDir/AppRun
+          cp "$desktop_file" AppDir/BitChord.desktop
+          chmod +x AppDir/AppRun
+
+      - name: Download appimagetool
+        run: |
+          curl --fail --location --retry 3 --retry-all-errors             https://github.com/AppImage/AppImageKit/releases/download/continuous/appimagetool-x86_64.AppImage             --output appimagetool
+          chmod +x appimagetool
+          file appimagetool
+
+      - name: Build AppImage
+        env:
+          ARCH: x86_64
+        run: |
+          ./appimagetool --appimage-extract
+          ./squashfs-root/AppRun AppDir BitChord-x86_64.AppImage
+          chmod +x BitChord-x86_64.AppImage
+          file BitChord-x86_64.AppImage
+          sha256sum BitChord-x86_64.AppImage > BitChord-x86_64.AppImage.sha256
+
+      - name: Upload AppImage artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: BitChord-linux-x86_64-AppImage
+          path: |
+            BitChord-x86_64.AppImage
+            BitChord-x86_64.AppImage.sha256
+          if-no-files-found: error
