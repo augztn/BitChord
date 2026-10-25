@@ -335,6 +335,16 @@ object SourceRegistry {
         publish(reordered + configs.value.filterNot { it.kind.isUserAdded })
     }
 
+    /**
+     * Replace only user-added sources from a validated backup. Built-in sources
+     * remain untouched, and imported links are normalized through [SourceConfig.tidied].
+     */
+    fun replaceUserAddedSources(imported: List<SourceConfig>) {
+        require(imported.all { it.kind.isUserAdded }) { "Only user-added sources can be restored" }
+        val builtIns = configs.value.filterNot { it.kind.isUserAdded }
+        publish(builtIns + imported.map { it.tidied() })
+    }
+
     private fun publish(next: List<SourceConfig>, persist: Boolean = true) {
         configs.value = next
         // Rebuilt against the previous map so that an untouched source keeps
